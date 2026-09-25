@@ -37,6 +37,71 @@ function isValidStellarAddress(address: string): boolean {
    return typeof address === 'string' && /^G[A-Z2-7]{55}$/.test(address);
 }
 
+function formatCountdown(ms: number): string {
+   if (!Number.isFinite(ms) || ms <= 0) {
+      return '0s';
+   }
+
+   const totalSeconds = Math.ceil(ms / 1000);
+   const days = Math.floor(totalSeconds / 86400);
+   const hours = Math.floor((totalSeconds % 86400) / 3600);
+   const minutes = Math.floor((totalSeconds % 3600) / 60);
+   const seconds = totalSeconds % 60;
+   const parts: string[] = [];
+
+   if (days > 0) parts.push(`${days}d`);
+   if (hours > 0) parts.push(`${hours}h`);
+   if (minutes > 0) parts.push(`${minutes}m`);
+   if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+
+   return parts.join(' ');
+}
+
+function getTimelockEventType(status: string): 'ActionProposed' | 'ActionExecuted' | 'ActionCancelled' {
+   switch (status) {
+      case 'executed':
+         return 'ActionExecuted';
+      case 'cancelled':
+         return 'ActionCancelled';
+      default:
+         return 'ActionProposed';
+   }
+}
+
+function serializeTimelockAction(action: any) {
+   const executionNotBefore = action.executionNotBefore
+      ? new Date(action.executionNotBefore)
+      : null;
+   const executedAt = action.executedAt ? new Date(action.executedAt) : null;
+   const executionTimestamp = executedAt ?? executionNotBefore;
+   const countdownMs =
+      action.status === 'pending' && executionNotBefore
+         ? Math.max(0, executionNotBefore.getTime() - Date.now())
+         : null;
+
+   return {
+      proposalId: action.proposalId,
+      changeType: action.changeType,
+      payload: action.payload ?? {},
+      status: action.status,
+      eventType: getTimelockEventType(action.status),
+      createdAt: action.createdAt ? new Date(action.createdAt).toISOString() : null,
+      executionTimestamp: executionTimestamp ? executionTimestamp.toISOString() : null,
+      executionNotBefore: executionNotBefore ? executionNotBefore.toISOString() : null,
+      executedAt: executedAt ? executedAt.toISOString() : null,
+      cancelledAt:
+         action.status === 'cancelled' && action.createdAt
+            ? new Date(action.createdAt).toISOString()
+            : null,
+      ...(countdownMs !== null
+         ? {
+             countdownMs,
+             countdown: formatCountdown(countdownMs),
+          }
+         : {}),
+   };
+}
+
 const adminRouter = Router();
 
 adminRouter.patch('/creators/:id/metadata', httpUpdateCreatorMetadata);
@@ -178,6 +243,63 @@ const proposeSchema = z.object({
  * Submit a propose_config_change contract call and store the proposal
  * with its executionNotBefore timestamp (now + 48h).
  */
+adminRouter.get(
+   '/timelock/pending',
+   adminGuard,
+   async (_req: AdminRequest, res, next) => {
+      try {
+         const actions = await prisma.timelockProposal.findMany({
+            where: { status: 'pending' },
+            orderBy: [{ executionNotBefore: 'asc' }, { createdAt: 'desc' }],
+         });
+
+         const serialized = actions.map(serializeTimelockAction);
+         const nextAction = serialized.reduce<any>((earliest, current) => {
+            if (!current.executionTimestamp) return earliest;
+            if (!earliest) return current;
+            return new Date(current.executionTimestamp).getTime() <
+               new Date(earliest.executionTimestamp).getTime()
+               ? current
+               : earliest;
+         }, null);
+
+         sendSuccess(res, {
+            actions: serialized,
+            total: serialized.length,
+            nextExecutionTimestamp: nextAction?.executionTimestamp ?? null,
+            nextExecutionCountdownMs: nextAction?.countdownMs ?? null,
+            nextExecutionCountdown: nextAction?.countdown ?? null,
+         });
+      } catch (error) {
+         logger.error({ error }, 'Failed to list pending timelock actions');
+         next(error);
+      }
+   }
+);
+
+adminRouter.get(
+   '/timelock/history',
+   adminGuard,
+   async (_req: AdminRequest, res, next) => {
+      try {
+         const actions = await prisma.timelockProposal.findMany({
+            where: { status: { in: ['executed', 'cancelled'] } },
+            orderBy: [{ executedAt: 'desc' }, { createdAt: 'desc' }],
+         });
+
+         const history = actions.map(serializeTimelockAction);
+
+         sendSuccess(res, {
+            history,
+            total: history.length,
+         });
+      } catch (error) {
+         logger.error({ error }, 'Failed to list timelock action history');
+         next(error);
+      }
+   }
+);
+
 adminRouter.post(
    '/timelock/propose',
    adminGuard,
