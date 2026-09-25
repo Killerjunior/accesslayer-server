@@ -55,6 +55,7 @@ import {
    processBuyback,
 } from './key-deprecation.service';
 import { getKeyCooldown } from './key-cooldown.service';
+import { getKeyHoldingCapacity } from './key-holding-capacity.service';
 import { StellarAddressSchema } from '../wallet/wallet.schemas';
 import {
    freezePosition,
@@ -399,6 +400,37 @@ router.get('/:keyId/cooldown', async (req, res, next) => {
       sendSuccess(
          res,
          await getKeyCooldown(String(req.params.keyId), parsed.data.wallet)
+      );
+   } catch (error) {
+      if (error instanceof KeyNotFoundError) {
+         sendNotFound(res, 'Key');
+         return;
+      }
+      next(error);
+   }
+});
+
+/**
+ * GET /api/v1/keys/:keyId/holding-capacity?wallet=
+ * Wallet holding, holder cap, and remaining purchase capacity on a key.
+ */
+router.get('/:keyId/holding-capacity', async (req, res, next) => {
+   const parsed = walletQuerySchema.safeParse(req.query);
+   if (!parsed.success) {
+      sendValidationError(
+         res,
+         'Invalid query parameters',
+         zodIssuesToDetails(parsed.error.issues)
+      );
+      return;
+   }
+   try {
+      sendSuccess(
+         res,
+         await getKeyHoldingCapacity(
+            String(req.params.keyId),
+            parsed.data.wallet
+         )
       );
    } catch (error) {
       if (error instanceof KeyNotFoundError) {
