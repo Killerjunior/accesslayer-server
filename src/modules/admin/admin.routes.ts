@@ -12,6 +12,10 @@ import { getKeySnapshot, KeySnapshotNotFoundError } from './key-snapshot.service
 import { createAuditEntry } from './audit-log.service';
 import { invalidateProtocolStatusCache } from '../protocol/protocol.routes';
 import {
+   analyticsWindowQuerySchema,
+   getPlatformAnalytics,
+} from '../keys/key-analytics.service';
+import {
    adminGuard,
    AdminRequest,
 } from '../../middlewares/admin-guard.middleware';
@@ -50,6 +54,30 @@ adminRouter.post('/keys/:keyId/resume', adminGuard, httpSetKeyTradingPaused);
 adminRouter.post('/keys/:keyId/sync', adminGuard, httpSyncKeyState);
 adminRouter.patch('/protocol-fee', adminGuard, httpUpdateProtocolFee);
 adminRouter.get('/audit-log', adminGuard, httpGetAuditLog);
+
+/**
+ * GET /api/v1/admin/analytics?from=&to=
+ *
+ * Platform-wide trade count, unique traders, total volume, and number of
+ * traded keys for the admin dashboard. Cached 60s per window (#916).
+ */
+adminRouter.get('/analytics', adminGuard, async (req: AdminRequest, res, next) => {
+   const parsed = analyticsWindowQuerySchema.safeParse(req.query);
+   if (!parsed.success) {
+      sendValidationError(
+         res,
+         'Invalid analytics query',
+         zodIssuesToDetails(parsed.error.issues)
+      );
+      return;
+   }
+   try {
+      sendSuccess(res, await getPlatformAnalytics(parsed.data));
+   } catch (error) {
+      logger.error({ error }, 'Platform analytics failed');
+      next(error);
+   }
+});
 
 /**
  * GET /api/v1/admin/keys/:keyId/snapshot

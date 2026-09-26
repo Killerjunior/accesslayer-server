@@ -25,6 +25,10 @@ import { cacheControl } from '../../middlewares/cache-control.middleware';
 import { envConfig } from '../../config';
 import { getKeyProposals } from './key-proposals.service';
 import { getKeySupply } from './key-supply.service';
+import {
+   analyticsWindowQuerySchema,
+   getKeyAnalytics,
+} from './key-analytics.service';
 import { KeySearchQueryTooShortError, searchKeys } from './key-search.service';
 import { KEY_SEARCH_MIN_QUERY_LENGTH } from '../../constants/notifications.constants';
 import dividendRouter from '../dividends/dividend.routes';
@@ -408,6 +412,35 @@ router.post(
 router.get('/:keyId/supply', async (req, res, next) => {
    try {
       sendSuccess(res, await getKeySupply(req.params.keyId));
+   } catch (error) {
+      if (error instanceof KeyNotFoundError) {
+         sendNotFound(res, 'Key');
+         return;
+      }
+      next(error);
+   }
+});
+
+/**
+ * GET /api/v1/keys/:keyId/analytics?from=&to=
+ * Trade count, unique traders, and total volume for a key, optionally
+ * windowed by trade timestamp. Cached 60s per key/window (#916).
+ */
+router.get('/:keyId/analytics', async (req, res, next) => {
+   const parsed = analyticsWindowQuerySchema.safeParse(req.query);
+   if (!parsed.success) {
+      sendValidationError(
+         res,
+         'Invalid analytics query',
+         zodIssuesToDetails(parsed.error.issues)
+      );
+      return;
+   }
+   try {
+      sendSuccess(
+         res,
+         await getKeyAnalytics(String(req.params.keyId), parsed.data)
+      );
    } catch (error) {
       if (error instanceof KeyNotFoundError) {
          sendNotFound(res, 'Key');
