@@ -4,7 +4,6 @@ import { Router } from 'express';
 import { sendNotFound, sendSuccess } from '../../utils/api-response.utils';
 import {
    httpListCreators,
-   httpGetCreator,
    httpGetCreatorPortfolioKeys,
    httpGetCreatorStats,
    httpGetTrendingCreators,
